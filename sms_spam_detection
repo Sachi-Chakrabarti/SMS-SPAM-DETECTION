@@ -1,0 +1,129 @@
+---
+title: "SMS SPAM DETECTION"
+author: "Sachi Chakrabarti"
+output:
+  html_notebook: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+
+```{r}
+#libraries
+library(tm)
+library(SnowballC)
+library(caTools)
+library(glmnet)
+library(caret)
+
+# Loading dataset
+data <- read.csv('C:/Users/sachi/OneDrive/Documents/spam.csv', stringsAsFactors = FALSE)
+
+#structure of the dataset
+str(data)
+
+# Renaming columns for ease of understanding
+colnames(data) <- c("label", "text")
+
+# Label column to factor
+data$label <- as.factor(data$label)
+
+# Encode
+data$text <- iconv(data$text, to = "UTF-8")
+
+# Text preprocessing
+corpus <- Corpus(VectorSource(data$text))
+corpus <- tm_map(corpus, content_transformer(tolower))
+corpus <- tm_map(corpus, content_transformer(function(x) iconv(x, to = "UTF-8", sub = "byte")))
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, removeNumbers)
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+corpus <- tm_map(corpus, stemDocument)
+corpus <- tm_map(corpus, stripWhitespace)
+
+# Creating the Document-Term Matrix
+dtm <- DocumentTermMatrix(corpus)
+
+# Converting the DTM to a matrix
+dtm_matrix <- as.matrix(dtm)
+
+# Creating TF-IDF features
+tfidf <- weightTfIdf(dtm)
+tfidf_matrix <- as.matrix(tfidf)
+
+# Splitting the data into training and testing sets
+set.seed(123)
+split <- sample.split(data$label, SplitRatio = 0.7)
+train_data <- tfidf_matrix[split == TRUE, ]
+test_data <- tfidf_matrix[split == FALSE, ]
+train_labels <- data$label[split == TRUE]
+test_labels <- data$label[split == FALSE]
+
+#Logistic Regression model
+model <- cv.glmnet(train_data, train_labels, family = "binomial", alpha = 0)
+
+# Predicting on the test set
+predictions <- predict(model, newx = test_data, s = "lambda.min", type = "class")
+
+# Converting predictions to factor
+predictions <- as.factor(predictions)
+levels(predictions) <- levels(test_labels)
+
+# Evaluating model
+confusion_matrix <- confusionMatrix(predictions, test_labels)
+
+# Confusion matrix and accuracy
+print(confusion_matrix)
+
+# Accuracy
+accuracy <- sum(predictions == test_labels) / length(test_labels)
+print(paste("Accuracy: ", accuracy))
+
+
+# Training the final model on the entire dataset
+final_model <- glmnet(tfidf_matrix, data$label, family = "binomial", alpha = 0)
+
+# Saving the trained model
+saveRDS(final_model, file = "spam_detection_model.rds")
+
+# Function to predict if a given sample input is spam or ham
+predict_spam <- function(input_text) {
+  # Preprocess the input text
+  input_corpus <- Corpus(VectorSource(input_text))
+  input_corpus <- tm_map(input_corpus, content_transformer(tolower))
+  input_corpus <- tm_map(input_corpus, content_transformer(function(x) iconv(x, to = "UTF-8", sub = "byte")))
+  input_corpus <- tm_map(input_corpus, removePunctuation)
+  input_corpus <- tm_map(input_corpus, removeNumbers)
+  input_corpus <- tm_map(input_corpus, removeWords, stopwords("english"))
+  input_corpus <- tm_map(input_corpus, stemDocument)
+  input_corpus <- tm_map(input_corpus, stripWhitespace)
+  
+  # Creating the document-term matrix for input text
+  input_dtm <- DocumentTermMatrix(input_corpus, control = list(dictionary = Terms(dtm)))
+  input_tfidf <- weightTfIdf(input_dtm, normalize = FALSE)
+  input_tfidf_matrix <- as.matrix(input_tfidf)
+  
+# Loading the saved model
+loaded_model <- readRDS("spam_detection_model.rds")
+
+# Extracting the lambda values used during cross-validation
+lambda_values <- loaded_model$lambda
+
+# Choosing a specific lambda value (e.g., the first one)
+lambda_value <- lambda_values[1]
+
+# Predict using the loaded model and the chosen lambda value
+prediction <- predict(loaded_model, newx = input_tfidf_matrix, s = lambda_value, type = "class")
+
+  # Return the prediction
+  return(prediction)
+}
+
+#SAMPLE INPUT
+input_text <- "Thats cool. How was your day?"
+prediction <- predict_spam(input_text)
+print(prediction)  # This will print "spam" or "ham" depending on the prediction
+
+
+```
